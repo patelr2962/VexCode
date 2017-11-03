@@ -1,0 +1,246 @@
+void moveBase (int speed)
+{
+	motor[leftBase] = speed;
+	motor[rightBase] = speed;
+}
+
+void moveRightBase (int speed)
+{
+	motor[rightBase] = speed;
+}
+
+void moveLeftBase (int speed)
+{
+	motor[leftBase] = speed;
+}
+
+void turnBase (int speed) //positive is clockwise
+{
+	motor[leftBase] = speed;
+	motor[rightBase] = -speed;
+}
+//reading is in ticks -- 627.2 ticks/revolution (393)
+//1 turn of wheels -- 5 inch wheels = 627.2*2 ticks
+//5*pi inches =  627.2*2 ticks
+
+//ticks per inch = (627.2*2)/(5*pi) = 79.8575842458
+int inchToTicks (float inch)
+{
+	int ticks;
+	ticks = inch*79.8575842458;
+	return ticks;
+}
+
+int degreesToTicks (float degree)
+{
+	int ticksPerTurn = /*Find amount during tests*/;
+	int ticks = degree*ticksPerTurn/360;
+	return ticks;
+}
+
+int fixTimerValue (float rawSeconds)
+{
+	int milliseconds;
+	milliseconds = rawSeconds*1000;
+	if (milliseconds < 250)
+	{
+		milliseconds = 250;
+	}
+	return milliseconds;
+}
+//>>>>>>>>>>>>>>>>>>>>----------0----------<<<<<<<<<<<<<<<<<<<<
+
+void PIDBaseControl (float target, float waitTime, float maxPower = 1)
+{
+	float Kp = /*Find amount during tests*/;
+	float Ki = /*Find amount during tests*/;
+	float Kd = /*Find amount during tests*/;
+
+	int error;
+
+	float proportion;
+	int integralRaw;
+	float integral;
+	int lastError;
+	int derivative;
+
+
+	float integralActiveZone = inchToTicks(/*Find amount during tests*/);
+	float integralPowerLimit = 50/Ki;
+
+	int finalPower;
+	
+	//Error Correction 	
+	float Kp_C = 0.01;
+	int error_drift;
+	float proportion_drift;
+
+	bool timerBool = true;
+
+	nMotorEncoder[leftBase] = 0;
+	nMotorEncoder[rightBase] = 0;
+
+	clearTimer(T1);
+
+	while(time1[T1] < fixTimerValue(waitTime)) 
+	{
+
+		error = inchesToTick(target) - (nMotorEncoder[leftBase]+nMotorEncoder[rightBase]);
+		
+		proportion = Kp*error;
+
+		if (abs(error) < integralActiveZone && error != 0)
+		{
+			integralRaw = integralRaw+error;
+		}
+		else
+		{
+			integralRaw = 0;
+		}
+		if (integralRaw > integralPowerLimit)
+		{
+			integralRaw = integralPowerLimit;
+		}
+		if (integralRaw < -integralPowerLimit)
+		{
+			integralRaw = -integralPowerLimit;
+		}
+		integral = Ki*integralRaw;
+
+		derivative = Kd*(error-lastError);
+		lastError = error;
+
+		if (error == 0)
+		{
+			derivative = 0;
+		}
+
+		finalPower = proportion+integral+derivative; //(P+I+D)
+
+		if (finalPower > maxPower*127)
+		{
+			finalPower = maxPower*127;
+		}
+		else if (finalPower < -maxPower*127)
+		{
+			finalPower = -maxPower*127;
+		}
+
+		error_drift = nMotorEncoder[rightBase]-nMotorEncoder[leftBase];
+		proportion_drift = Kp_C*error_drift;
+
+		moveLeftBase(finalPower+proportion_drift);
+		moveRightBase(finalPower-proportion_drift);
+
+		//When error is 30, the error in inches is -0.3
+		wait1Msec(40);
+
+		if (error < 30)
+		{
+			timerBool = false;
+		}
+		if (timerBool)
+		{
+			clearTimer(T1);
+		}
+	}
+	moveBase(0);
+}
+
+void PIDBaseTurn (int target, float waitTime, float maxPower = 1)
+{
+	float Kp = /*Find amount during tests*/;
+	float Ki = /*Find amount during tests*/;
+	float Kd = /*Find amount during tests*/;
+
+	int error;
+
+	float proportion;
+	int integralRaw;
+	float integral;
+	int lastError;
+	int derivative;
+
+
+	float integralActiveZone = inchToTicks(/*Find amount during tests*/);
+	float integralPowerLimit = 50/Ki;
+
+	int finalPower;
+
+	bool timerBool = true;
+
+	nMotorEncoder[leftBase] = 0;
+	nMotorEncoder[rightBase] = 0;
+
+	clearTimer(T1);
+
+	while(time1[T1] < fixTimerValue(waitTime)) 
+	{
+
+		error = inchesToTick(target) - (nMotorEncoder[leftBase]-nMotorEncoder[rightBase]);
+		
+		proportion = Kp*error;
+
+		if (abs(error) < integralActiveZone && error != 0)
+		{
+			integralRaw = integralRaw+error;
+		}
+		else
+		{
+			integralRaw = 0;
+		}
+		if (integralRaw > integralPowerLimit)
+		{
+			integralRaw = integralPowerLimit;
+		}
+		if (integralRaw < -integralPowerLimit)
+		{
+			integralRaw = -integralPowerLimit;
+		}
+		integral = Ki*integralRaw;
+
+		derivative = Kd*(error-lastError);
+		lastError = error;
+
+		if (error == 0)
+		{
+			derivative = 0;
+		}
+
+		finalPower = proportion+integral+derivative; //(P+I+D)
+
+		if (finalPower > maxPower*127)
+		{
+			finalPower = maxPower*127;
+		}
+		else if (finalPower < -maxPower*127)
+		{
+			inalPower = -maxPower*127;
+		}
+
+		turnBase(finalPower);
+
+		//When error is 30, the error in inches is -0.3
+		wait1Msec(40);
+
+		if (error < 30)
+		{
+			timerBool = false;
+		}
+		if (timerBool)
+		{
+			clearTimer(T1);
+		}
+	}
+	turnBase(0);
+}
+
+task main()
+{
+	PIDBaseControl(12,1,0.75);
+	PIDBaseTurn(1000,1);
+	while(true)
+	{
+		wait1Msec(20);
+	}
+}
