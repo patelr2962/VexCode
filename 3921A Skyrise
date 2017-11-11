@@ -1,0 +1,2222 @@
+#pragma config(UART_Usage, UART1, uartVEXLCD, baudRate19200, IOPins, None, None)
+#pragma config(I2C_Usage, I2C1, i2cSensors)
+#pragma config(Sensor, in1,    RightLiftPot,   sensorPotentiometer)
+#pragma config(Sensor, in2,    LeftLiftPot,    sensorPotentiometer)
+#pragma config(Sensor, in3,    Gyro,           sensorGyro)
+#pragma config(Sensor, in4,    AutonTweak,     sensorPotentiometer)
+#pragma config(Sensor, in5,    epicArmPot,     sensorPotentiometer)
+#pragma config(Sensor, dgtl3,  TopLimitSwitch, sensorTouch)
+#pragma config(Sensor, dgtl4,  solenoid,       sensorDigitalOut)
+#pragma config(Sensor, dgtl5,  LeftUltrasonic, sensorSONAR_mm)
+#pragma config(Sensor, dgtl7,  RightUltrasonic, sensorSONAR_mm)
+#pragma config(Sensor, I2C_1,  RBEncoder,      sensorQuadEncoderOnI2CPort,    , AutoAssign)
+#pragma config(Sensor, I2C_2,  LFEncoder,      sensorQuadEncoderOnI2CPort,    , AutoAssign)
+#pragma config(Motor,  port2,           LeftFrontMotor, tmotorVex393HighSpeed_MC29, openLoop, driveLeft, encoderPort, I2C_2)
+#pragma config(Motor,  port3,           RightFrontMotor, tmotorVex393HighSpeed_MC29, openLoop, driveRight)
+#pragma config(Motor,  port4,           RightBackMotor, tmotorVex393HighSpeed_MC29, openLoop, driveRight, encoderPort, I2C_1)
+#pragma config(Motor,  port5,           LeftBackMotor, tmotorVex393HighSpeed_MC29, openLoop, driveLeft)
+#pragma config(Motor,  port6,           RightLiftMotor, tmotorVex393_MC29, openLoop)
+#pragma config(Motor,  port7,           LeftLiftMotor, tmotorVex393_MC29, openLoop)
+#pragma config(Motor,  port8,           TreadIntakeMotor, tmotorVex393_MC29, openLoop)
+#pragma config(Motor,  port9,           EpicArm, tmotorVex269_MC29, openLoop)
+
+#pragma DebuggerWindows("Globals")
+#pragma DebuggerWindows("VexLCD")
+#pragma DebuggerWindows("Motors")
+
+#pragma platform(VEX)
+
+#pragma competitionControl(Competition)
+#pragma autonomousDuration(15)
+#pragma userControlDuration(99999999999)
+
+#include "Vex_Competition_Includes.c"
+
+int liftaverage = SensorValue[LeftLiftPot] + SensorValue[RightLiftPot];
+int lifttarget = liftaverage;
+int gyrooutput;
+int liftPIDtoggler = 1;
+int autonSelector = 1;
+int gyrocurrentvalue = 0;
+int intakeActivation = 0;
+int AIntakeWaitTime = 0;
+int AIntakeCommand = 0;
+int liftActivation = 0;
+int ALiftHeight = 2200;
+int ALiftCommand = 0;
+int ALiftHold = 0;
+int ArmActivation = 0;
+int AArmPos = 0;
+int AArmCommand = 0;
+int AArmHold = 0;
+int DCcount = 1;
+int intake2ndDriverMode = 0;
+int armHoldDisabler = 0;
+float liftholdvalue = 0;
+
+/*
+tweaks array index:
+
+1 = first back off auton 1
+2 = first turn auton 1
+3 = second turn auton 1
+4 = second back off auton 1
+5 = first back off auton 2
+6 = first turn auton 2
+7 = second turn auton 2
+8 = second back off auton 2
+
+Joystick Mapping:
+
+Joystick 1:
+
+Channel 1: can't use it
+Channel 2: base turning
+Channel 3: base forward/backward
+Channel 4: base strafing
+Channel 5: intake tread
+Channel 6: lift
+Channel 7:
+R = autonomous
+U = arm go forward
+D = arm go backwards
+L = toggle to disable lift PID
+Channel 8:
+R = pneumatics
+U = disable arm hold
+
+Joystick 2:
+
+Channel 1: empty
+Channel 2: intake analog control
+Channel 3: lift analog control
+Channel 4: empty
+Channel 5: U = hold arm
+Channel 6: empty
+Channel 7:
+U = high goal
+R = mid goal
+D = low goal
+L = pickup skyrise height
+Channel 8:
+U = LCD middle button
+L = LCD left button
+R = LCD right button
+D = turn on LCD light
+
+left base: forward is positive
+right base: forward is negative
+gyro: clockwise is negative
+*/
+
+void moveforward (int speed)
+{
+	motor[port2]= -(speed);
+	motor[port3]= speed;
+	motor[port4]= speed;
+	motor[port5]= -(speed);
+}
+
+void moveback (int speed)
+{
+	motor[port2]= speed;
+	motor[port3]= -(speed);
+	motor[port4]= -(speed);
+	motor[port5]= speed;
+}
+
+void strafeleft (int speed)
+{
+	motor[port2]= speed;
+	motor[port3]= speed;
+	motor[port4]= -(speed);
+	motor[port5]= -(speed);
+}
+
+void straferight (int speed)
+{
+	motor[port2]= -(speed);
+	motor[port3]= -(speed);
+	motor[port4]= speed;
+	motor[port5]= speed;
+}
+
+void moveleftbase (int speed)
+{
+	motor[port2]= -(speed);
+	motor[port5]= -(speed);
+}
+
+void moverightbase (int speed)
+{
+	motor[port3]= speed;
+	motor[port4]= speed;
+}
+
+void turnleft (int speed)
+{
+	motor[port2]= speed;
+	motor[port3]= speed;
+	motor[port4]= speed;
+	motor[port5]= speed;
+}
+
+void movefrontbase (int speed) // strafe right
+{
+	motor[LeftFrontMotor]= -(speed);
+	motor[RightFrontMotor]= -(speed);
+}
+
+void movebackbase (int speed) // strafe right
+{
+	motor[RightBackMotor]= speed;
+	motor[LeftBackMotor]= speed;
+}
+
+void stopbase()
+{
+	motor[port2]= 0;
+	motor[port3]= 0;
+	motor[port4]= 0;
+	motor[port5]= 0;
+}
+
+void liftup (int speed)
+{
+	motor[port6]= -(speed);
+	motor[port7]= speed;
+}
+
+void liftdown (int speed)
+{
+	motor[port6]= speed;
+	motor[port7]= -(speed);
+}
+
+void stoplift()
+{
+	motor[port6]= 0;
+	motor[port7]= 0;
+}
+
+void intakeup (int speed)
+{
+	motor[port8]= -(speed);
+}
+
+void intakedown (int speed)
+{
+	motor[port8]= speed;
+}
+
+void stopallmotors()
+{
+	stopbase();
+	stoplift();
+	intakeup(0);
+}
+
+void closepneumatics()
+{
+	SensorValue[solenoid] = 0;
+}
+
+void openpneumatics()
+{
+	SensorValue[solenoid] = 1;
+}
+
+void epicarmforward (int speed)
+{
+	motor[port9] = speed;
+}
+
+void fixgyro()
+{
+	SensorFullCount[in3] = 36000;
+}
+
+void resetGyro (int value = 0)
+{
+	gyrocurrentvalue = SensorValue[Gyro] + value;
+}
+
+task GyroProcessingBlock() //This block enables users to zero out gyro value.
+{
+	while (true)
+	{
+		gyrooutput = SensorValue[Gyro] - gyrocurrentvalue;
+		wait1Msec(10);
+	}
+}
+
+void PIDIMEGyroDriveStraight (int distance, int waittime, float deduction = 1)
+{
+	float Kp = 0.5;
+	float Kd = 0.5;
+	float Ki = 0.002;
+	float integralLimit = 30/(Ki*deduction);
+	int integralActiveZone = 1200;
+
+	float error;
+	int lastError;
+
+	float proportion;
+	float derivative;
+	float integral;
+	float integral_final;
+	float driveRaw;
+
+	float Kp_G = 0.15;
+	float error_drift;
+	float driveDeduction;
+
+	float driveLeft;
+	float driveRight;
+
+	int timer = 0;
+
+	nMotorEncoder[RightBackMotor] = 0;
+	nMotorEncoder[LeftFrontMotor] = 0;
+
+	resetGyro();
+	clearTimer(T1);
+
+	while (time1[T1] < waittime)
+	{
+		error = distance-(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor]);
+
+		proportion = Kp*error;
+
+		derivative = Kd*(error-lastError);
+		lastError = error;
+
+		if(abs(error) < integralActiveZone && error != 0)
+		{
+			integral = integral+error;
+		}
+		else if (error == 0)
+		{
+			integral = 0;
+		}
+		else
+		{
+			integral = 0;
+		}
+
+		if (integral > integralLimit)
+		{
+			integral = integralLimit;
+		}
+		else if (integral < -(integralLimit))
+		{
+			integral = -(integralLimit);
+		}
+
+		integral_final = Ki*integral;
+
+		driveRaw = proportion+derivative+integral_final;
+
+		if (driveRaw > deduction*127)
+		{
+			driveRaw = deduction*127;
+		}
+		else if (driveRaw < -deduction*127)
+		{
+			driveRaw = -deduction*127;
+		}
+
+		error_drift = gyrooutput;
+
+		driveDeduction = Kp_G*error_drift;
+
+		driveLeft = driveRaw+driveDeduction;
+		driveRight = driveRaw-driveDeduction;
+
+		moveleftbase(driveLeft);
+		moverightbase(driveRight);
+
+		wait1Msec(20);
+
+		if (abs(error) < 50)
+		{
+			timer = 1;
+		}
+		if (timer == 0)
+		{
+			clearTimer(T1);
+		}
+	}
+	stopbase();
+}
+
+void PIDBaseGyroTurn (int target, int waittime, float deduction = 1, int type = 0)
+{
+	float Kp = 0.45;
+	float Kd = 0.5;
+	float Ki = 0.01;
+
+	float error = 500;
+	int lastError;
+
+	float proportion;
+	float derivative;
+	float integral;
+	float integral_final;
+	float drive;
+
+	float  integralLimit = 30/(Ki*deduction);
+	int integralActiveZone = 500;
+
+	int timer = 0;
+
+	if (type == 0)
+	{
+		resetGyro();
+	}
+	else if (type == 1)
+	{
+		resetGyro(SensorValue[Gyro]);
+	}
+
+	clearTimer(T1);
+
+	while (time1[T1] < waittime)
+	{
+		error = target-gyrooutput;       //calculate error
+
+		proportion = Kp*error;
+
+		derivative = Kd*(error-lastError);            //calculate the derivative
+		lastError  = error;
+
+		if(abs(error) < integralActiveZone && error != 0)
+		{
+			integral = integral+error;
+		}
+		else if (error == 0)
+		{
+			integral = 0;
+		}
+		else
+		{
+			integral = 0;
+		}
+
+		if (integral > integralLimit)
+		{
+			integral = integralLimit;
+		}
+		else if (integral < -(integralLimit))
+		{
+			integral = -(integralLimit);
+		}
+
+		integral_final = Ki*integral;
+
+		drive = proportion+derivative+integral_final;
+
+		if (drive > deduction*127)
+		{
+			drive = deduction*127;
+		}
+		else if (drive < -deduction*127)
+		{
+			drive = -deduction*127;
+		}
+
+		turnleft(drive);
+
+		wait1Msec(20);
+
+		if (abs(error) < 50)
+		{
+			timer = 1;
+		}
+		if (timer == 0)
+		{
+			clearTimer(T1);
+		}
+	}
+	stopbase();
+}
+
+void PIDIMEGyroStrafe (int distance, int waittime, float deduction = 1)
+{
+	float Kp = 0.5;
+	float Kd = 0.5;
+	float Ki = 0.002;
+	float integralLimit = 30/(Ki*deduction);
+	int integralActiveZone = 1200;
+
+	float error;
+	int lastError;
+
+	float proportion;
+	float derivative;
+	float integral;
+	float integral_final;
+	float driveRaw;
+
+	float Kp_G = 0.3;
+	float error_drift;
+	float driveDeduction;
+
+	float driveFront;
+	float driveBack;
+
+	int timer = 0;
+
+	nMotorEncoder[RightBackMotor] = 0;
+	nMotorEncoder[LeftFrontMotor] = 0;
+
+	resetGyro();
+	clearTimer(T1);
+
+	while (time1[T1] < waittime)
+	{
+		error = distance-(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor]);
+
+		proportion = Kp*error;
+
+		derivative = Kd*(error-lastError);
+		lastError = error;
+
+		if(abs(error) < integralActiveZone && error != 0)
+		{
+			integral = integral+error;
+		}
+		else if (error == 0)
+		{
+			integral = 0;
+		}
+		else
+		{
+			integral = 0;
+		}
+
+		if (integral > integralLimit)
+		{
+			integral = integralLimit;
+		}
+		else if (integral < -(integralLimit))
+		{
+			integral = -(integralLimit);
+		}
+
+		integral_final = Ki*integral;
+
+		driveRaw = proportion+derivative+integral_final;
+
+		if (driveRaw > deduction*127)
+		{
+			driveRaw = deduction*127;
+		}
+		else if (driveRaw < -deduction*127)
+		{
+			driveRaw = -deduction*127;
+		}
+
+		error_drift = gyrooutput;
+
+		driveDeduction = Kp_G*error_drift;
+
+		driveFront = driveRaw-driveDeduction;
+		driveBack = driveRaw-driveDeduction;
+
+		movefrontbase(driveFront);
+		movebackbase(driveBack);
+
+		wait1Msec(20);
+
+		if (abs(error) < 50)
+		{
+			timer = 1;
+		}
+		if (timer == 0)
+		{
+			clearTimer(T1);
+		}
+	}
+	stopbase();
+}
+
+void holonomicbasecontrol()
+{
+	int LFmotor;
+	int LBmotor;
+	int RFmotor;
+	int RBmotor;
+	int threashold1 = 3000;
+	int threashold2 = 4500;
+
+	LFmotor = -vexRT[Ch3]-vexRT[Ch4]-vexRT[Ch1]; //calculate motor values
+	LBmotor = -vexRT[Ch3]+vexRT[Ch4]-vexRT[Ch1];
+	RFmotor = vexRT[Ch3]-vexRT[Ch4]-vexRT[Ch1];
+	RBmotor = vexRT[Ch3]+vexRT[Ch4]-vexRT[Ch1];
+
+	if (liftaverage < threashold1 || abs(liftaverage - 490) < 5)
+	{
+		motor[port2] = LFmotor; //drive at full power
+		motor[port3] = RFmotor;
+		motor[port4] = RBmotor;
+		motor[port5] = LBmotor;
+	}
+	else if (liftaverage > threashold2)
+	{
+		motor[port2] = 0.3*LFmotor;
+		motor[port3] = 0.3*RFmotor;
+		motor[port4] = 0.3*RBmotor;
+		motor[port5] = 0.3*LBmotor;
+	}
+	else
+	{
+		motor[port2] = 0.5*LFmotor;
+		motor[port3] = 0.5*RFmotor;
+		motor[port4] = 0.5*RBmotor;
+		motor[port5] = 0.5*LBmotor;
+	}
+}
+
+void liftcontrol()
+{
+	int liftupperbound = 5500; //big 5850
+	int liftlowerbound = 2400; //small
+
+	liftaverage = SensorValue[LeftLiftPot] + SensorValue[RightLiftPot];
+
+	if (liftaverage < liftlowerbound && liftaverage > 500)
+	{
+		if (vexRT[Btn6U] == 1)
+		{
+			liftup (127) ;
+			lifttarget = liftaverage;
+		}
+		else if (vexRT[Btn6D] == 1)
+		{
+			liftdown (127);
+			lifttarget = liftaverage;
+		}
+		else
+		{
+			if (vexRT[Ch2Xmtr2] > 10)
+			{
+				liftup(vexRT[Ch2Xmtr2]);
+				lifttarget = liftaverage;
+			}
+			else if (vexRT[Ch2Xmtr2] < -10)
+			{
+				liftdown (127);
+				lifttarget = liftaverage;
+			}
+			else
+			{
+				liftup (-20);
+			}
+		}
+	}
+	else if (liftaverage > liftupperbound)
+	{
+		if (vexRT[Btn6D] == 1)
+		{
+			liftdown (80) ;
+			lifttarget = liftaverage;
+		}
+		else if (vexRT[Btn6U] == 1)
+		{
+			liftup (20);
+			lifttarget = liftaverage;
+		}
+		else
+		{
+			if (vexRT[Ch2Xmtr2] > 10)
+			{
+				liftup(20);
+				lifttarget = liftaverage;
+			}
+			else if (vexRT[Ch2Xmtr2] < -10)
+			{
+				liftdown (vexRT[Ch2Xmtr2]);
+				lifttarget = liftaverage;
+			}
+			else
+			{
+				if (liftPIDtoggler == 1)
+				{
+					liftup (liftholdvalue);
+				}
+				else
+				{
+					liftup (0);
+				}
+			}
+		}
+	}
+	else
+	{
+		if (vexRT[Btn6U] == 1)
+		{
+			liftup (127) ;
+			lifttarget = liftaverage;
+		}
+		else if (vexRT[Btn6D] == 1)
+		{
+			lifttarget = liftaverage;
+			if (liftPIDtoggler == 1)
+			{
+				liftdown (127);
+			}
+			else
+			{
+				liftdown (80);
+			}
+		}
+		else
+		{
+			if (abs(vexRT[Ch2Xmtr2]) > 10)
+			{
+				liftup (vexRT[Ch2Xmtr2]);
+				lifttarget = liftaverage;
+			}
+			else
+			{
+				if (liftPIDtoggler == 1)
+				{
+					liftup (liftholdvalue);
+				}
+				else
+				{
+					liftup (0);
+				}
+			}
+		}
+	}
+	if (liftaverage < 2200)
+	{
+		liftaverage = 2100;
+	}
+}
+
+task PIDliftcontrol()
+{
+	float Kp = 0.4;
+	float Kd = 1.2;
+	float Ki = 0.007;
+
+	float error;
+	int lastError;
+
+	float proportion;
+	float derivative;
+	float integral;
+	float integral_final;
+
+	int integralActiveZone = 200;
+	float integralLimit = 40;
+
+	float speedProfile;
+
+	while (true)
+	{
+		error = lifttarget-liftaverage;//calculate error
+
+		proportion = Kp*error; //calculate proportion
+
+		derivative = Kd*(error-lastError);  //calculate the derivative
+		lastError  = error;
+
+		if (abs(error) < integralActiveZone && error != 0) //calculate integral
+		{
+			integral = integral+error;
+		}
+		else if (error == 0)
+		{
+			integral = 0;
+		}
+		else
+		{
+			integral = 0;
+		}
+
+		if (integral > integralLimit)
+		{
+			integral = integralLimit;
+		}
+		else if (integral < -(integralLimit))
+		{
+			integral = -(integralLimit);
+		}
+
+		if (vexRT[Btn6U] == 1 || vexRT[Btn6D] == 1)
+		{
+			integral = 0;
+		}
+
+		integral_final = Ki*integral;
+
+		if (vexRT[Btn6U] == 1 || vexRT[Btn6D] == 1 || abs(vexRT[Ch2Xmtr2])>7)
+		{
+			clearTimer(T3);
+		}
+		if (time1[T3] < 1000)
+		{
+			lifttarget = SensorValue[LeftLiftPot] + SensorValue[RightLiftPot];
+			if (SensorValue[LeftLiftPot]+SensorValue[RightLiftPot] > 2200)
+			{
+				speedProfile = 20;
+			}
+			else
+			{
+				speedProfile = -20;
+			}
+
+		}
+		else
+		{
+			if (SensorValue[LeftLiftPot]+SensorValue[RightLiftPot] > 2200)
+			{
+				speedProfile = 10;
+			}
+			else
+			{
+				speedProfile = 0;
+			}
+		}
+
+		liftholdvalue = proportion+derivative+integral_final+speedProfile; //calculate output
+
+		if (liftholdvalue > 127)
+		{
+			liftholdvalue = 127;
+		}
+		else if (liftholdvalue < -127)
+		{
+			liftholdvalue = -127;
+		}
+
+		wait1Msec (20);
+	}
+}
+
+void epicArmControl()
+{
+	int highestpos = 1300;
+
+	if (abs(SensorValue[epicArmPot]-247)<5)
+	{
+		if (vexRT[Btn7U] == 1)
+		{
+			epicarmforward (127);
+		}
+		else if (vexRT[Btn7D] == 1)
+		{
+			epicarmforward (-127);
+		}
+		else
+		{
+			if (vexRT[Btn5UXmtr2] == 1)
+			{
+				if (armHoldDisabler == 0)
+				{
+					epicarmforward(-10);
+				}
+				else
+				{
+					epicarmforward(0);
+				}
+			}
+			else
+			{
+				epicarmforward (0);
+			}
+		}
+	}
+	else
+	{
+		if (SensorValue[epicArmPot]>highestpos)
+		{
+			if (vexRT[Btn7U] == 1)
+			{
+				epicarmforward (127);
+			}
+			else if (vexRT[Btn7D] == 1)
+			{
+				epicarmforward (-127);
+			}
+			else
+			{
+				if (intake2ndDriverMode == 1)
+				{
+					if (abs(vexRT[Ch3Xmtr2])<5)
+					{
+						if (armHoldDisabler == 0)
+						{
+							epicarmforward(10);
+						}
+						else
+						{
+							epicarmforward(0);
+						}
+					}
+					else
+					{
+						epicarmforward(vexRT[Ch3Xmtr2]);
+					}
+				}
+				else
+				{
+					if (armHoldDisabler == 0)
+					{
+						epicarmforward(10);
+					}
+					else
+					{
+						epicarmforward(0);
+					}
+				}
+			}
+		}
+		else if (SensorValue[epicArmPot]<highestpos)
+		{
+			if (vexRT[Btn7U] == 1)
+			{
+				epicarmforward (127);
+			}
+			else if (vexRT[Btn7D] == 1)
+			{
+				epicarmforward (-127);
+			}
+			else
+			{
+				if (intake2ndDriverMode == 1)
+				{
+					if (abs(vexRT[Ch3Xmtr2])<5)
+					{
+						if (armHoldDisabler == 0)
+						{
+							epicarmforward(-10);
+						}
+						else
+						{
+							epicarmforward(0);
+						}
+					}
+					else
+					{
+						epicarmforward(vexRT[Ch3Xmtr2]);
+					}
+				}
+				else
+				{
+					if (armHoldDisabler == 0)
+					{
+						epicarmforward(-10);
+					}
+					else
+					{
+						epicarmforward(0);
+					}
+				}
+			}
+		}
+	}
+}
+
+void intakecontrol()
+{
+	if (vexRT[Btn5U] == 1 && vexRT[Btn5D] == 0)
+	{
+		intakeup (127);
+	}
+	else if (vexRT[Btn5D] == 1 && vexRT[Btn5U] == 0)
+	{
+		intakedown (127);
+	}
+	else if (vexRT[Btn5D] == 1 && vexRT[Btn5U] == 1)
+	{
+		intakeup(20);
+	}
+	else
+	{
+		if (intake2ndDriverMode == 0)
+		{
+			intakeup(vexRT[Ch3Xmtr2]);
+		}
+		else
+		{
+			intakeup(0);
+		}
+	}
+}
+
+task togglerloop()
+{
+	while(true)
+	{
+		if (vexRT[Btn8DXmtr2] == 1)
+		{
+			if (bLCDBacklight == false)
+			{
+				bLCDBacklight = true;
+				wait1Msec(10);
+				while (vexRT[Btn8DXmtr2] == 1){wait1Msec(10);}
+			}
+			else
+			{
+				bLCDBacklight = false;
+				wait1Msec(10);
+				while (vexRT[Btn8DXmtr2] == 1){wait1Msec(10);}
+			}
+		}
+		if (vexRT[Btn5DXmtr2] == 1)
+		{
+			if (SensorValue[solenoid] == 0)
+			{
+				SensorValue[solenoid] = 1;
+				wait1Msec(10);
+				while (vexRT[Btn5DXmtr2] == 1){wait1Msec(10);}
+			}
+			else
+			{
+				SensorValue[solenoid] = 0;
+				wait1Msec(10);
+				while (vexRT[Btn5DXmtr2] == 1){wait1Msec(10);}
+			}
+		}
+		if (vexRT[Btn7L] == 1)
+		{
+			if (liftPIDtoggler == 1)
+			{
+				liftPIDtoggler = 0;
+				wait1Msec(10);
+				while (vexRT[Btn7L] == 1){wait1Msec(10);}
+			}
+			else
+			{
+				liftPIDtoggler = 1;
+				wait1Msec(10);
+				while (vexRT[Btn7L] == 1){wait1Msec(10);}
+			}
+		}
+		if (vexRT[Btn5UXmtr2] == 1)
+		{
+			if (intake2ndDriverMode == 0)
+			{
+				intake2ndDriverMode = 1;
+				wait1Msec(10);
+				while (vexRT[Btn5UXmtr2] == 1){wait1Msec(10);}
+			}
+			else
+			{
+				intake2ndDriverMode = 0;
+				wait1Msec(10);
+				while (vexRT[Btn5UXmtr2] == 1){wait1Msec(10);}
+			}
+		}
+		if (vexRT[Btn8U] == 1)
+		{
+			if (armHoldDisabler == 0)
+			{
+				armHoldDisabler = 1;
+				wait1Msec(10);
+				while (vexRT[Btn8U] == 1){wait1Msec(10);}
+			}
+			else
+			{
+				armHoldDisabler = 0;
+				wait1Msec(10);
+				while (vexRT[Btn8U] == 1){wait1Msec(10);}
+			}
+		}
+		wait1Msec(10);
+	}
+}
+
+task isolatedPneumaticsLoop()
+{
+	while(true)
+	{
+		if (vexRT[Btn8R] == 1)
+		{
+			if (SensorValue[solenoid] == 0)
+			{
+				SensorValue[solenoid] = 1;
+				wait1Msec(10);
+				while (vexRT[Btn8R] == 1){wait1Msec(10);}
+			}
+			else
+			{
+				SensorValue[solenoid] = 0;
+				wait1Msec(10);
+				while (vexRT[Btn8R] == 1){wait1Msec(10);}
+			}
+		}
+		wait1Msec(10);
+	}
+}
+
+void clearLCD()
+{
+	clearLCDLine(0);
+	clearLCDLine(1);
+}
+
+void AutonomousSelection()
+{
+	clearLCD();
+	while(nLCDButtons != 2 && vexRT[Btn7L] == 0)
+	{
+		displayLCDCenteredString(0,"Autonomous");
+		displayLCDCenteredString(1,"<   Select   >");
+		displayLCDNumber(0,14,autonSelector,2);
+
+		if (nLCDButtons == 1)
+		{
+			autonSelector--;
+			while (nLCDButtons == 1){wait1Msec(10);}
+		}
+		else if (nLCDButtons == 4)
+		{
+			autonSelector++;
+			while (nLCDButtons == 4){wait1Msec(10);}
+		}
+		if (autonSelector < 1)
+		{
+			autonSelector = 12;
+		}
+		else if (autonSelector > 12)
+		{
+			autonSelector = 1;
+		}
+		wait1Msec(10);
+	}
+	clearLCD();
+}
+
+task flashLCDLight_liftPID()
+{
+
+	while (true)
+	{
+		if (liftPIDtoggler == 1)
+		{
+			while (liftPIDtoggler == 1)
+			{
+				wait1Msec(10);
+			}
+			if (bLCDBacklight == true)
+			{
+				for (int i=0; i<4; i++)
+				{
+					bLCDBacklight = false;
+					wait1Msec(200);
+					bLCDBacklight = true;
+					wait1Msec(200);
+				}
+			}
+			else if (bLCDBacklight == false)
+			{
+				for (int i=0; i<4; i++)
+				{
+					bLCDBacklight = true;
+					wait1Msec(200);
+					bLCDBacklight = false;
+					wait1Msec(200);
+				}
+			}
+		}
+		else if (liftPIDtoggler == 0)
+		{
+			while (liftPIDtoggler == 0)
+			{
+				wait1Msec(10);
+			}
+			if (bLCDBacklight == true)
+			{
+				for (int i=0; i<4; i++)
+				{
+					bLCDBacklight = false;
+					wait1Msec(200);
+					bLCDBacklight = true;
+					wait1Msec(200);
+				}
+			}
+			else if (bLCDBacklight == false)
+			{
+				for (int i=0; i<4; i++)
+				{
+					bLCDBacklight = true;
+					wait1Msec(200);
+					bLCDBacklight = false;
+					wait1Msec(200);
+				}
+			}
+		}
+		wait1Msec(10);
+	}
+}
+
+void DisplayGyroValue()
+{
+	displayLCDCenteredString(0,"GyroRaw GyroFine");
+	displayLCDNumber(1,0,SensorValue[Gyro],6);
+	displayLCDNumber(1,7,gyrooutput,6);
+	if (nLCDButtons == 2 || vexRT[Btn8UXmtr2] == 1)
+	{
+		resetGyro();
+	}
+}
+
+void DisplayPotentiometerValues()
+{
+	liftaverage = SensorValue[LeftLiftPot] + SensorValue[RightLiftPot];
+	displayLCDCenteredString(0,"Left Avg Right");
+	displayLCDNumber(1,0,SensorValue[LeftLiftPot],4);
+	displayLCDNumber(1,5,liftaverage,4);
+	displayLCDNumber(1,12,SensorValue[RightLiftPot],4);
+	if (nLCDButtons == 2)
+	{
+		if (liftPIDtoggler == 0)
+		{
+			liftPIDtoggler = 1;
+			while(nLCDButtons == 2){wait1Msec(10);}
+		}
+		else
+		{
+			liftPIDtoggler = 0;
+			while(nLCDButtons == 2){wait1Msec(10);}
+		}
+	}
+}
+
+void DisplayBatteryValues()
+{
+	string mainBattery, backupBattery;
+
+	displayLCDString(0,0,"Primary:");
+	sprintf(mainBattery, "%1.2f%c", nImmediateBatteryLevel/1000.0,'V');
+	displayLCDString(0,9,mainBattery);
+
+	displayLCDString(1,0,"Backup: ");
+	sprintf(backupBattery, "%1.2f%c", BackupBatteryLevel/1000.0,'V');
+	displayLCDString(1,9,backupBattery);
+}
+
+void DisplayBaseEncoderValues()
+{
+	displayLCDCenteredString(0,"Left    Right");
+	displayLCDNumber(1,1,nMotorEncoder[LeftFrontMotor],6);
+	displayLCDNumber(1,10,nMotorEncoder[RightBackMotor],6);
+	if (nLCDButtons == 2 || vexRT[Btn8UXmtr2] == 1)
+	{
+		nMotorEncoder[LeftFrontMotor] = 0;
+		nMotorEncoder[RightBackMotor] = 0;
+	}
+}
+
+void ManualInitializeGyro()
+{
+	displayLCDCenteredString(0,"Init Gyro");
+	displayLCDCenteredString(1,"Keep Still");
+	if (nLCDButtons == 2 || vexRT[Btn8UXmtr2] == 1)
+	{
+		SensorType[in3] = sensorNone;
+		wait1Msec(1200);
+		SensorType[in3] = sensorGyro;
+		wait1Msec(2000);
+	}
+}
+
+void SwapAuton()
+{
+	displayLCDCenteredString(0,"Autonomous");
+	displayLCDCenteredString(1,"Swap");
+	displayLCDNumber(0,14,autonSelector,2);
+
+	if (nLCDButtons == 2)
+	{
+		autonSelector ++;
+		while (nLCDButtons == 2){wait1Msec(10);}
+	}
+	else if (autonSelector > 12)
+	{
+		autonSelector = 1;
+	}
+}
+
+void StartAuton()
+{
+	displayLCDCenteredString(0,"Start Auton");
+	displayLCDNumber(0,14,autonSelector,2);
+	displayLCDCenteredString(1,"press button");
+}
+
+void DisplayArmPotValue()
+{
+	displayLCDCenteredString(0,"Arm Values");
+	displayLCDNumber(1,0,SensorValue[epicArmPot],4);
+	displayLCDNumber(1,10,motor[port9],4);
+}
+
+void DisplayJoystickChannels()
+{
+	displayLCDNumber(0,2,vexRT[Ch3],4);
+	displayLCDNumber(1,2,vexRT[Ch4],4);
+	displayLCDNumber(1,9,vexRT[Ch1],4);
+}
+
+void DisplayJoystick2Channels()
+{
+	displayLCDCenteredString(0,"Joystick 2");
+	displayLCDNumber(1,2,vexRT[Ch3],4);
+	displayLCDNumber(1,9,vexRT[Ch2],4);
+}
+
+void DisplayBaseMotorPowers()
+{
+	displayLCDNumber(0,2,motor[LeftFrontMotor],4);
+	displayLCDNumber(0,9,motor[RightFrontMotor],4);
+	displayLCDNumber(1,2,motor[LeftBackMotor],4);
+	displayLCDNumber(1,9,motor[RightBackMotor],4);
+}
+
+void DisplayLiftPowers()
+{
+	displayLCDCenteredString(0,"Lift Powers");
+	displayLCDNumber(1,2,motor[LeftLiftMotor],4);
+	displayLCDNumber(1,9,motor[RightLiftMotor],4);
+}
+
+task DriverControlViewValues()
+{
+	clearLCD();
+	while (true)
+	{
+		if (nLCDButtons == 1 || vexRT[Btn8LXmtr2] == 1) //if left button pressed
+		{
+			DCcount --;
+			while (nLCDButtons == 1 || vexRT[Btn8LXmtr2] == 1){wait1Msec(10);}
+			clearLCD();
+			wait1Msec(10);
+		}
+		else if (nLCDButtons == 4 || vexRT[Btn8RXmtr2] == 1)
+		{
+			DCcount ++;
+			while (nLCDButtons == 4 || vexRT[Btn8RXmtr2] == 1){wait1Msec(10);}
+			clearLCD();
+			wait1Msec(10);
+		}
+		if (DCcount < 1)
+		{
+			DCcount = 12;
+		}
+		else if (DCcount > 12)
+		{
+			DCcount = 1;
+		}
+		if (DCcount == 1)
+		{
+			DisplayBatteryValues();
+		}
+		else if (DCcount == 2)
+		{
+			DisplayGyroValue();
+		}
+		else if (DCcount == 3)
+		{
+			ManualInitializeGyro();
+		}
+		else if (DCcount == 4)
+		{
+			DisplayPotentiometerValues();
+		}
+		else if (DCcount == 5)
+		{
+			DisplayBaseEncoderValues();
+		}
+		else if (DCcount == 6)
+		{
+			DisplayArmPotValue();
+		}
+		else if (DCcount == 7)
+		{
+			DisplayJoystickChannels();
+		}
+		else if (DCcount == 8)
+		{
+			DisplayJoystick2Channels();
+		}
+		else if (DCcount == 9)
+		{
+			DisplayBaseMotorPowers();
+		}
+		else if (DCcount == 10)
+		{
+			DisplayLiftPowers();
+		}
+		else if (DCcount == 11)
+		{
+			SwapAuton();
+		}
+		else if (DCcount == 12)
+		{
+			StartAuton();
+		}
+		wait1Msec(10);
+	}
+}
+
+void StopLCDTasks()
+{
+	stopTask(DriverControlViewValues);
+	clearLCD();
+}
+
+task intakeTimedControl()
+{
+	while(true)
+	{
+		if (intakeActivation == 1)
+		{
+			clearTimer(T4);
+			while (time1[T4] < AIntakeWaitTime)
+			{
+				intakeup(AIntakeCommand);
+				wait1Msec(10);
+			}
+			intakeup(0);
+			intakeActivation = 0;
+			AIntakeWaitTime = 0;
+			AIntakeCommand = 0;
+		}
+		wait1Msec(10);
+	}
+}
+
+void ASetIntake(int time, int speed)
+{
+	AIntakeWaitTime = time;
+	AIntakeCommand = speed;
+	intakeActivation = 1;
+}
+
+task liftAutonControl()
+{
+	while(true)
+	{
+		if (liftActivation == 1)
+		{
+			if ((SensorValue[LeftLiftPot]+SensorValue[RightLiftPot])<ALiftHeight)
+			{
+				while (SensorValue[LeftLiftPot]+SensorValue[RightLiftPot]<ALiftHeight)
+				{
+					liftup(ALiftCommand);
+					wait1Msec(10);
+				}
+			}
+			else if ((SensorValue[LeftLiftPot]+SensorValue[RightLiftPot])>ALiftHeight)
+			{
+				while (SensorValue[LeftLiftPot]+SensorValue[RightLiftPot]>ALiftHeight)
+				{
+					liftdown(ALiftCommand);
+					wait1Msec(10);
+				}
+			}
+			liftup(ALiftHold);
+			liftActivation = 0;
+			ALiftCommand = 0;
+			ALiftHold = 0;
+		}
+		wait1Msec(10);
+	}
+}
+
+void ASetLift(int height, int speed, int hold)
+{
+	ALiftHeight = height;
+	ALiftCommand = speed;
+	ALiftHold = hold;
+	liftActivation = 1;
+}
+
+task ArmAutonControl()
+{
+	while(true)
+	{
+		if (ArmActivation == 1)
+		{
+			if (SensorValue[epicArmPot]<AArmPos)
+			{
+				while (SensorValue[epicArmPot]<AArmPos)
+				{
+					epicarmforward(-AArmCommand);
+					wait1Msec(10);
+				}
+			}
+			else if (SensorValue[epicArmPot]>AArmPos)
+			{
+				while (SensorValue[epicArmPot]>AArmPos)
+				{
+					epicarmforward(AArmCommand);
+					wait1Msec(10);
+				}
+			}
+			epicarmforward(AArmHold);
+			ArmActivation = 0;
+			AArmCommand = 0;
+			AArmHold = 0;
+		}
+		wait1Msec(10);
+	}
+}
+
+void ASetArm (int position, int speed, int hold)
+{
+	AArmPos = position;
+	AArmCommand = speed;
+	AArmHold = hold;
+	ArmActivation = 1;
+}
+
+void auton1()
+{
+
+}
+
+void auton2()
+{
+
+}
+
+void auton3() // 6 pts auton on cube side, strafe right
+{
+	liftup(80);						//score the cube on low goal
+	wait1Msec(1200);
+	ASetLift(2200,127,-20);
+	ASetArm(2600,127,-10);
+	wait1Msec(1400);
+
+	PIDIMEGyroDriveStraight(500,20,1);			//drive straight
+	PIDIMEGyroDriveStraight(280,200,0.3);			//drive straight
+
+	ASetIntake(1200,127);
+	wait1Msec(500);
+
+	PIDIMEGyroDriveStraight(749,600,0.85);			//drive straight
+
+	nMotorEncoder[RightBackMotor] = 0;			//Reset encoders
+	nMotorEncoder[LeftFrontMotor] = 0;
+
+	straferight(127);					//strafe right a little bit
+	while(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor] < 374){wait1Msec(10);}
+	stopbase();
+
+	PIDIMEGyroDriveStraight(749,600,0.6);			//drive straight
+	PIDBaseGyroTurn(1000,1000,0.8,1);			//turn and face goal
+
+	liftup(127);
+	while((SensorValue[LeftLiftPot] + SensorValue[RightLiftPot]) < 4020){wait1Msec(10);}
+	liftup(0);
+
+	PIDIMEGyroDriveStraight(420,200,0.3);			//drive straight
+
+	intakedown(127);					//dump
+	wait1Msec(1400);
+	intakeup(0);
+
+	moveback(40);						//move back
+	wait1Msec(600);
+	stopallmotors();
+}
+
+void auton4() //6 pts auton on cube side, strafe left
+{
+	liftup(80);						//score the cube on low goal
+	wait1Msec(1200);
+	ASetLift(2200,127,-20);
+	ASetArm(2600,127,-10);
+	wait1Msec(2000);
+
+	PIDIMEGyroDriveStraight(500,20,0.7);			//drive straight
+	PIDIMEGyroDriveStraight(280,200,0.3);			//drive straight
+
+	ASetIntake(1200,127);
+	wait1Msec(500);
+
+	PIDIMEGyroDriveStraight(749,600,0.85);			//drive straight
+
+	nMotorEncoder[RightBackMotor] = 0;			//Reset encoders
+	nMotorEncoder[LeftFrontMotor] = 0;
+
+	strafeleft(127);					//strafe right a little bit
+	while(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor] > -374){wait1Msec(10);}
+	stopbase();
+
+	PIDIMEGyroDriveStraight(749,600,0.6);			//drive straight
+	PIDBaseGyroTurn(-1000,1000,0.8,1);			//turn and face goal
+
+	liftup(127);
+	while((SensorValue[LeftLiftPot] + SensorValue[RightLiftPot]) < 4020){wait1Msec(10);}
+	liftup(0);
+
+	PIDIMEGyroDriveStraight(420,200,0.3);			//drive straight
+
+	intakedown(127);					//dump
+	wait1Msec(1400);
+	intakeup(0);
+
+	moveback(40);						//move back
+	wait1Msec(600);
+	stopallmotors();
+}
+
+void auton5() //4 pts auton on skyrise side, strafe right
+{
+	ASetArm(1300,127,0);
+	wait1Msec(700);
+
+	PIDIMEGyroDriveStraight(380,20,1);			//drive straight
+	PIDIMEGyroDriveStraight(280,200,0.3);			//drive straight
+
+	ASetIntake(1200,127);
+	wait1Msec(1000);
+
+	PIDIMEGyroDriveStraight(749,600,0.85);			//drive straight
+
+	nMotorEncoder[RightBackMotor] = 0;			//Reset encoders
+	nMotorEncoder[LeftFrontMotor] = 0;
+
+	straferight(127);					//strafe right a little bit
+	while(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor] < 374){wait1Msec(10);}
+	stopbase();
+
+	PIDIMEGyroDriveStraight(749,600,0.6);			//drive straight
+	PIDBaseGyroTurn(1000,1000,0.8,1);			//turn and face goal
+
+	liftup(127);
+	while((SensorValue[LeftLiftPot] + SensorValue[RightLiftPot]) < 4020){wait1Msec(10);}
+	liftup(0);
+
+	PIDIMEGyroDriveStraight(420,200,0.3);			//drive straight
+
+	intakedown(127);					//dump
+	wait1Msec(1400);
+	intakeup(0);
+
+	moveback(40);						//move back
+	wait1Msec(600);
+	stopallmotors();
+}
+
+void auton6() //4 pts auton on cube side, turn left
+{
+	ASetArm(1300,127,0);
+	wait1Msec(700);
+
+	PIDIMEGyroDriveStraight(380,20,0.7);			//drive straight
+	PIDIMEGyroDriveStraight(280,200,0.3);			//drive straight
+
+	ASetIntake(1200,127);
+	wait1Msec(1000);
+
+	PIDIMEGyroDriveStraight((749-120),600,0.85);			//drive straight
+
+	nMotorEncoder[RightBackMotor] = 0;			//Reset encoders
+	nMotorEncoder[LeftFrontMotor] = 0;
+
+	strafeleft(127);					//strafe left a little bit
+	while(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor] > -374){wait1Msec(10);}
+	stopbase();
+
+	PIDIMEGyroDriveStraight((749+60),600,0.6);			//drive straight
+	PIDBaseGyroTurn(-900,1000,0.8,1);			//turn and face goal
+
+	liftup(127);
+	while((SensorValue[LeftLiftPot] + SensorValue[RightLiftPot]) < 4020){wait1Msec(10);}
+	liftup(0);
+
+	PIDIMEGyroDriveStraight(340,200,0.3);			//drive straight
+
+	intakedown(127);					//dump
+	wait1Msec(1400);
+	intakeup(0);
+
+	moveback(40);						//move back
+	wait1Msec(600);
+	stopallmotors();
+}
+
+void auton7()// strafe right a bit more
+{
+	liftdown(127);
+	wait1Msec(300);
+	liftdown(33);
+	wait1Msec(20);
+	ASetArm(1700,127,-80);
+	nMotorEncoder[LeftFrontMotor] = 0;
+	nMotorEncoder[RightBackMotor] = 0;
+	straferight(127);
+	while(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor] < (320+62+124)){wait1Msec(10);}
+	stopbase();
+	PIDBaseGyroTurn(-20,1000,1);
+	wait1Msec(400);
+	epicarmforward(0);
+	closepneumatics();
+	wait1Msec(300);
+	ASetArm(0,127,0);
+	while(SensorValue[epicArmPot] > 300){wait1Msec(10);}
+	wait1Msec(300);
+	openpneumatics();
+	wait1Msec(300);
+	ASetArm(2000,127,-40);
+	while(SensorValue[epicArmPot] < 2100){wait1Msec(10);}
+	wait1Msec(600);
+	closepneumatics();
+	wait1Msec(300);
+	ASetArm(0,127,0);
+	wait1Msec(500);
+	ASetLift(2325,127,-10);//first lift height
+	while(SensorValue[epicArmPot] > 300){wait1Msec(10);}
+	wait1Msec(300);
+	openpneumatics();
+	wait1Msec(300);
+	ASetArm(2000,127,-40);
+	wait1Msec(400);
+	ASetLift(2200,127,-20);
+	while(SensorValue[epicArmPot] < 2100){wait1Msec(10);}
+	wait1Msec(600);
+	closepneumatics();
+	wait1Msec(300);
+	ASetArm(0,127,0);
+	wait1Msec(500);
+	ASetLift(2700,127,-10);//second lift height
+	while(SensorValue[epicArmPot] > 300){wait1Msec(10);}
+	wait1Msec(300);
+	openpneumatics();
+	wait1Msec(300);
+	ASetArm(2000,127,-40);
+	wait1Msec(300);
+	ASetLift(2200,127,-20);
+	while(SensorValue[epicArmPot] < 2100){wait1Msec(10);}
+	wait1Msec(600);
+	closepneumatics();
+	wait1Msec(300);
+	ASetArm(0,127,0);
+	wait1Msec(500);
+	ASetLift(2900,127,-10);//third lift height
+	while(SensorValue[epicArmPot] > 300){wait1Msec(10);}
+	wait1Msec(300);
+	openpneumatics();
+	wait1Msec(300);
+		ASetArm(2000,127,-40);
+}
+void auton8()// strafe left a bit less
+{
+	liftdown(127);
+	wait1Msec(300);
+	liftdown(33);
+	wait1Msec(20);
+	ASetArm(1700,127,-80);
+	nMotorEncoder[LeftFrontMotor] = 0;
+	nMotorEncoder[RightBackMotor] = 0;
+	strafeleft(127);
+	while(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor] > -320){wait1Msec(10);}
+	stopbase();
+	PIDBaseGyroTurn(-40,1000,1);
+	wait1Msec(400);
+	epicarmforward(0);
+	closepneumatics();
+	wait1Msec(300);
+	ASetArm(0,127,0);
+	while(SensorValue[epicArmPot] > 300){wait1Msec(10);}
+	wait1Msec(300);
+	openpneumatics();
+	wait1Msec(300);
+	ASetArm(2000,127,-40);
+	while(SensorValue[epicArmPot] < 2100){wait1Msec(10);}
+	wait1Msec(600);
+	closepneumatics();
+	wait1Msec(300);
+	ASetArm(0,127,0);
+	wait1Msec(500);
+	ASetLift(2325,127,-10);//first lift height
+	while(SensorValue[epicArmPot] > 300){wait1Msec(10);}
+	wait1Msec(300);
+	openpneumatics();
+	wait1Msec(300);
+	ASetArm(2000,127,-40);
+	wait1Msec(400);
+	ASetLift(2200,127,-20);
+	while(SensorValue[epicArmPot] < 2100){wait1Msec(10);}
+	wait1Msec(600);
+	closepneumatics();
+	wait1Msec(300);
+	ASetArm(0,127,0);
+	wait1Msec(500);
+	ASetLift(2700,127,-10);//second lift height
+	while(SensorValue[epicArmPot] > 300){wait1Msec(10);}
+	wait1Msec(300);
+	openpneumatics();
+	wait1Msec(300);
+	ASetArm(2000,127,-40);
+	wait1Msec(300);
+	ASetLift(2200,127,-20);
+	while(SensorValue[epicArmPot] < 2100){wait1Msec(10);}
+	wait1Msec(600);
+	closepneumatics();
+	wait1Msec(300);
+	ASetArm(0,127,0);
+	wait1Msec(500);
+	ASetLift(2900,127,-10);//third lift height
+	while(SensorValue[epicArmPot] > 300){wait1Msec(10);}
+	wait1Msec(300);
+	openpneumatics();
+	wait1Msec(300);
+	ASetArm(2000,127,-40);
+}
+
+void auton9() // determined to do a hybrid of previous autonomous, 6 pts
+{
+	ASetArm(1300,127,0);
+	wait1Msec(500);
+
+	PIDIMEGyroDriveStraight(-120,1000,0.4);
+	ASetLift(3230,127,-5);
+	wait1Msec(1000);
+
+	moveforward(70);
+	wait1Msec(500);
+	stopbase();
+
+	intakedown(127);
+	wait1Msec(700);
+	intakeup(0);
+
+	PIDIMEGyroDriveStraight(-122,300,1);
+
+	ASetLift(2200,127,-20);
+	wait1Msec(300);
+
+	PIDBaseGyroTurn(1350,400,1);
+
+	PIDIMEGyroDriveStraight(465,200,0.7);
+
+	ASetIntake(1200,127);
+	wait1Msec(800);
+
+	PIDIMEGyroDriveStraight(749,600,0.85);			//drive straight
+
+	nMotorEncoder[RightBackMotor] = 0;			//Reset encoders
+	nMotorEncoder[LeftFrontMotor] = 0;
+
+	straferight(127);					//strafe right a little bit
+	while(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor] < 374){wait1Msec(10);}
+	stopbase();
+
+	PIDIMEGyroDriveStraight(749,600,0.6);			//drive straight
+
+	ASetLift(4020,127,0);
+	wait1Msec(300);
+
+	PIDBaseGyroTurn(450,500,1,1);			//turn and face goal
+
+	PIDIMEGyroDriveStraight(420,200,0.3);			//drive straight
+
+	intakedown(127);					//dump
+	wait1Msec(1400);
+	intakeup(0);
+
+	moveback(40);						//move back
+	wait1Msec(600);
+	stopallmotors();
+}
+
+void auton10()
+{
+	ASetArm(1300,127,0);
+	wait1Msec(500);
+
+	PIDIMEGyroDriveStraight(-120,1000,0.4);
+	ASetLift(3230,127,-5);
+	wait1Msec(1000);
+
+	moveforward(70);
+	wait1Msec(500);
+	stopbase();
+
+	intakedown(127);
+	wait1Msec(700);
+	intakeup(0);
+
+	PIDIMEGyroDriveStraight(-122,300,1);
+
+	ASetLift(2200,127,-20);
+	wait1Msec(300);
+
+	PIDBaseGyroTurn(-1350,400,1);
+
+	PIDIMEGyroDriveStraight(465,200,0.7);
+
+	ASetIntake(1200,127);
+	wait1Msec(800);
+
+	PIDIMEGyroDriveStraight(749,600,0.85);			//drive straight
+
+	nMotorEncoder[RightBackMotor] = 0;			//Reset encoders
+	nMotorEncoder[LeftFrontMotor] = 0;
+
+	strafeleft(127);					//strafe left a little bit
+	while(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor] > -374){wait1Msec(10);}
+	stopbase();
+
+	PIDIMEGyroDriveStraight(749,600,0.6);			//drive straight
+
+	ASetLift(4020,127,0);
+	wait1Msec(300);
+
+	PIDBaseGyroTurn(-450,500,1,1);			//turn and face goal
+
+	PIDIMEGyroDriveStraight(420,200,0.3);			//drive straight
+
+	intakedown(127);					//dump
+	wait1Msec(1400);
+	intakeup(0);
+
+	moveback(40);						//move back
+	wait1Msec(600);
+	stopallmotors();
+}
+
+void auton11()
+{
+	ASetArm(1300,127,0);
+	wait1Msec(500);
+
+	PIDIMEGyroDriveStraight(-120,1000,0.4);
+	ASetLift(3230,127,-5);
+	wait1Msec(1000);
+
+	moveforward(70);
+	wait1Msec(700);
+	stopbase();
+
+	intakedown(127);
+	wait1Msec(1500);
+	intakeup(0);
+
+	PIDIMEGyroDriveStraight(-210,300,0.7);
+
+	ASetLift(2200,127,-20);
+
+	PIDBaseGyroTurn(-1300,300,1);
+	PIDIMEGyroDriveStraight(640,200,0.7);
+
+	ASetIntake(1500,127);
+	wait1Msec(500);
+
+	PIDIMEGyroDriveStraight(-640,200,0.7);
+
+	ASetLift(3100,127,-5);
+	wait1Msec(500);
+
+	PIDBaseGyroTurn(1200,300,1);
+
+	moveforward(40);
+	wait1Msec(500);
+	moveleftbase(0);
+	wait1Msec(300);
+	stopbase();
+
+	intakedown(127);
+	wait1Msec(1500);
+	intakedown(0);
+}
+
+void auton12()
+{
+	ASetArm(1300,127,0);
+	wait1Msec(500);
+
+	PIDIMEGyroDriveStraight(-120,1000,0.4);
+	ASetLift(3230,127,-5);
+	wait1Msec(1000);
+
+	moveforward(70);
+	wait1Msec(700);
+	stopbase();
+
+	intakedown(127);
+	wait1Msec(1500);
+	intakeup(0);
+
+	PIDIMEGyroDriveStraight(-210,300,0.7);
+
+	ASetLift(2200,127,-20);
+
+	PIDBaseGyroTurn(1300,300,1);
+	PIDIMEGyroDriveStraight(640,200,0.7);
+
+	ASetIntake(1500,127);
+	wait1Msec(500);
+
+	PIDIMEGyroDriveStraight(-640,200,0.7);
+
+	ASetLift(3100,127,-5);
+	wait1Msec(500);
+
+	PIDBaseGyroTurn(-1200,300,1);
+
+	moveforward(40);
+	wait1Msec(500);
+	moverightbase(0);
+	wait1Msec(300);
+	stopbase();
+
+	intakedown(127);
+	wait1Msec(1500);
+	intakedown(0);
+}
+
+void epic8ptsAutonNeverUsed()
+{
+	liftup(80);				//latch cube on there
+	wait1Msec(700);
+
+	ASetLift(2200,127,-20);			//lower lift
+	ASetArm(700,127,-20);
+	wait1Msec(500);				//wait a sec until lift is not too high to cause instablilty
+	PIDIMEGyroDriveStraight(781,200,0.45);	//drive forward
+
+	ASetIntake(1000,127);			//start intake
+	wait1Msec(500);				//wait until hook gets it
+
+	PIDIMEGyroDriveStraight(250,20,1);	//drive forward into swing turn position
+
+	ASetLift(4200,127,10);			//start lift
+	resetGyro();				//swing turn & line up
+	moverightbase(127);
+	while(gyrooutput<800){wait1Msec(10);}
+	moveforward(80);
+	wait1Msec(600);
+
+	PIDIMEGyroDriveStraight(-312,200,0.7);	//back off a little bit
+
+	ASetLift(4020,127,-5);			//lift in position
+	wait1Msec(500);
+
+	ASetIntake(1000,-127);			//dump first cube
+	wait1Msec(1000);
+
+	PIDIMEGyroDriveStraight(-300,200,0.4);	//back off a little bit out of the way
+
+	PIDBaseGyroTurn(-1500,20,1); 		//the fast turn
+	ASetLift(2200,127,-20);			//lift down as robot gyro turns
+	wait1Msec(500);
+	PIDBaseGyroTurn(-300,400,0.4); 		//then slow down
+
+	PIDIMEGyroDriveStraight(860,300,1);	//drive forward to the cube
+
+	ASetIntake(1000,127);			//start intake
+	wait1Msec(300);	//wait until cube is hooked
+
+	PIDIMEGyroDriveStraight(-1000,200,1);	//back off all the way
+
+	PIDBaseGyroTurn(-1500,20,1);		//start the fast turn
+	ASetLift(4010,127,0);			//raise lift while robot turns
+	PIDBaseGyroTurn(-300,400,0.4);		//precise turn position
+
+	PIDIMEGyroDriveStraight(312,200,0.4);	//go forward a little bit
+
+	ASetIntake(1400,-127);			//dump
+}
+/*
+ASetArm(1200,127,0);
+wait1Msec(1000);
+
+PIDIMEGyroDriveStraight(500,20,1);			//drive straight
+PIDIMEGyroDriveStraight(280,200,0.3);			//drive straight
+
+ASetIntake(1200,127);
+wait1Msec(500);
+
+PIDIMEGyroDriveStraight(749,600,0.85);			//drive straight
+
+nMotorEncoder[RightBackMotor] = 0;			//Reset encoders
+nMotorEncoder[LeftFrontMotor] = 0;
+
+straferight(127);					//strafe right a little bit
+while(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor] < 374){wait1Msec(10);}
+stopbase();
+
+PIDIMEGyroDriveStraight(749,600,0.6);			//drive straight
+PIDBaseGyroTurn(1000,1000,0.8,1);			//turn and face goal
+
+liftup(127);
+while((SensorValue[LeftLiftPot] + SensorValue[RightLiftPot]) < 4020){wait1Msec(10);}
+liftup(0);
+
+PIDIMEGyroDriveStraight(420,200,0.3);			//drive straight
+
+intakedown(127);					//dump
+wait1Msec(1400);
+intakeup(0);
+
+moveback(40);						//move back
+wait1Msec(600);
+stopallmotors();
+
++++++++++++++++++++++++++++++++++++++++++++++++
+
+ASetArm(1200,127,0);
+wait1Msec(1000);
+
+PIDIMEGyroDriveStraight(500,20,0.7);			//drive straight
+PIDIMEGyroDriveStraight(280,200,0.3);			//drive straight
+
+ASetIntake(1200,127);
+wait1Msec(500);
+
+PIDIMEGyroDriveStraight(749,600,0.85);			//drive straight
+
+nMotorEncoder[RightBackMotor] = 0;			//Reset encoders
+nMotorEncoder[LeftFrontMotor] = 0;
+
+strafeleft(127);					//strafe right a little bit
+while(nMotorEncoder[LeftFrontMotor]-nMotorEncoder[RightBackMotor] > -374){wait1Msec(10);}
+stopbase();
+
+PIDIMEGyroDriveStraight(749,600,0.6);			//drive straight
+PIDBaseGyroTurn(-900,1000,0.8,1);			//turn and face goal
+
+liftup(127);
+while((SensorValue[LeftLiftPot] + SensorValue[RightLiftPot]) < 4020){wait1Msec(10);}
+liftup(0);
+
+PIDIMEGyroDriveStraight(420,200,0.3);			//drive straight
+
+intakedown(127);					//dump
+wait1Msec(1400);
+intakeup(0);
+
+moveback(40);						//move back
+wait1Msec(600);
+stopallmotors();
+
+*/
+void pre_auton()
+{
+	bStopTasksBetweenModes = true;
+	openpneumatics();
+	nMotorEncoder[RightBackMotor] = 0;
+	nMotorEncoder[TreadIntakeMotor] = 0;
+	fixgyro();
+	startTask(GyroProcessingBlock);
+	clearLCD();
+	AutonomousSelection();
+}
+
+task autonomous()
+{
+	startTask(ArmAutonControl);
+	startTask(intakeTimedControl);
+	startTask(liftAutonControl);
+	startTask(GyroProcessingBlock);//this thing cost us 2 matches!!!!!!!
+	if (autonSelector == 1)
+	{
+		auton1();
+	}
+	else if (autonSelector == 2)
+	{
+		auton2();
+	}
+	else if (autonSelector == 3)
+	{
+		auton3();
+	}
+	else if (autonSelector == 4)
+	{
+		auton4();
+	}
+	else if (autonSelector == 5)
+	{
+		auton5();
+	}
+	else if (autonSelector == 6)
+	{
+		auton6();
+	}
+	else if (autonSelector == 7)
+	{
+		auton7();
+	}
+	else if (autonSelector == 8)
+	{
+		auton8();
+	}
+	else if (autonSelector == 9)
+	{
+		auton9();
+	}
+	else if (autonSelector == 10)
+	{
+		auton10();
+	}
+	else if (autonSelector == 11)
+	{
+		auton11();
+	}
+	else if (autonSelector == 12)
+	{
+		auton12();
+	}
+	stopTask(intakeTimedControl);
+	stopTask(liftAutonControl);
+	stopallmotors();
+}
+
+//////////////////////////////////////////////////
+//                                              //
+//           Main user control loop             //
+//                                              //
+//   involves autonomous testing commands       //
+//                                              //
+// this is where most of the testings are done  //
+//                                              //
+//////////////////////////////////////////////////
+
+task usercontrol()
+{
+	StopLCDTasks();
+	wait1Msec(5);
+	startTask(GyroProcessingBlock);//this thing cost us 2 matches!!!!!!!!!!
+	startTask(PIDliftcontrol);
+	startTask(DriverControlViewValues);
+	startTask(togglerloop);
+	startTask(isolatedPneumaticsLoop);
+	startTask(flashLCDLight_liftPID);
+	clearLCD();
+
+	while (true)
+	{
+		if (vexRT[Btn7R] == 1||(DCcount==12&&nLCDButtons==2))
+		{
+			startTask(autonomous);
+			wait1Msec (15000);
+			stopTask(autonomous);
+			stopTask(intakeTimedControl);
+			stopTask(liftAutonControl);
+			lifttarget = SensorValue[LeftLiftPot] + SensorValue[RightLiftPot];
+		}
+		holonomicbasecontrol();
+		liftcontrol();
+		intakecontrol();
+		epicArmControl();
+		wait1Msec(20);
+	}
+}
+
+//Last edit: 2:52 PM 3/10/2015
+// things to do:
+// improve autonomous
+
+// 31.19437*2 ticks per inch
