@@ -208,7 +208,7 @@ void PIDBaseGyroTurn (int target, int waittime, float maxPower = 1, int type = 0
 	float integral;
 	float finalPower;
 
-	float  integralLimit = 30/(Ki*maxPower);
+	float  integralPowerLimit = 30/(Ki*maxPower);
 	int integralActiveZone = 500;
 
 	int timer = 0;
@@ -246,13 +246,13 @@ void PIDBaseGyroTurn (int target, int waittime, float maxPower = 1, int type = 0
 			integralRaw = 0;
 		}
 
-		if (integralRaw > integralLimit)
+		if (integralRaw > integralPowerLimit)
 		{
-			integralRaw = integralLimit;
+			integralRaw = integralPowerLimit;
 		}
-		else if (integralRaw < -(integralLimit))
+		else if (integralRaw < -(integralPowerLimit))
 		{
-			integralRaw = -(integralLimit);
+			integralRaw = -(integralPowerLimit);
 		}
 
 		integral = Ki*integralRaw;
