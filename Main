@@ -3,14 +3,18 @@ Index:
 
 Joystick Mapping:
 
-Joystick 1:
+Joystick 1-
 
-Channel 1: 
-Channel 2: 
+Channel 1: Base
+Channel 2: Base
 Channel 3: 
 Channel 4: 
 Channel 5: 
+U = 
+D =
 Channel 6: 
+U = 
+D = 
 Channel 7:
 U = 
 R = 
@@ -22,24 +26,28 @@ R =
 D = 
 L = 
 
-Joystick 2:
+Joystick 2-
 
 Channel 1: 
 Channel 2: 
 Channel 3: 
 Channel 4: 
 Channel 5: 
+U = 9 Cones
+D = 10 Cones
 Channel 6: 
+U = 11 Cones
+D = 12 Cones
 Channel 7:
-U = 
-R = 
-D = 
-L = 
+U = 1 Cone
+R = 2 Cones
+D = 3 Cones
+L = 4 Cones
 Channel 8:
-U = 
-L = 
-R = 
-D = 
+U = 5 Cones
+R = 6 Cones
+D = 7 Cones
+L = 8 Cones
 */
 
 //Potentiometer based straightening
