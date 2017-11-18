@@ -34,11 +34,11 @@ void moveLeftBase (int speed)
 	motor[leftBase] = speed;
 }
 
-/*void turnBase (int speed) //positive is clockwise
+void turnBase (int speed) //positive is clockwise
 {
 	motor[leftBase] = speed;
 	motor[rightBase] = -speed;
-}*/
+}
 
 void moveBase(int speed)
 {
@@ -207,6 +207,97 @@ void PIDBaseControl (float target, float waitTime, float maxPower = 1)
 		}
 	}
 	moveBase(0);
+}
+
+void PIDBaseGyroTurn (int target, int waittime, float maxPower = 1, int type = 0)
+{
+	float Kp = 0.45/*Find amount during tests*/;;
+	float Kd = 0.5/*Find amount during tests*/;;
+	float Ki = 0.01/*Find amount during tests*/;;
+
+	float error = 500;
+	int lastError;
+
+	float proportion;
+	float derivative;
+	float integralRaw;
+	float integral;
+	float finalPower;
+
+	float  integralLimit = 30/(Ki*maxPower);
+	int integralActiveZone = 500;
+
+	int timer = 0;
+
+	if (type == 0)
+	{
+		resetGyro();
+	}
+	else if (type == 1)
+	{
+		resetGyro(SensorValue[Gyro]);
+	}
+
+	clearTimer(T1);
+
+	while (time1[T1] < waittime)
+	{
+		error = target-gyrooutput;       //calculate error
+
+		proportion = Kp*error;
+
+		derivative = Kd*(error-lastError);            //calculate the derivative
+		lastError  = error;
+
+		if(abs(error) < integralActiveZone && error != 0)
+		{
+			integralRaw = integralRaw+error;
+		}
+		else if (error == 0)
+		{
+			integralRaw = 0;
+		}
+		else
+		{
+			integralRaw = 0;
+		}
+
+		if (integralRaw > integralLimit)
+		{
+			integralRaw = integralLimit;
+		}
+		else if (integralRaw < -(integralLimit))
+		{
+			integralRaw = -(integralLimit);
+		}
+
+		integral = Ki*integralRaw;
+
+		finalPower = proportion+derivative+integral;
+
+		if (finalPower > maxPower*127)
+		{
+			finalPower = maxPower*127;
+		}
+		else if (finalPower < -maxPower*127)
+		{
+			finalPower = -maxPower*127;
+		}
+
+		turnleft(finalPower);
+
+		wait1Msec(20);
+
+		if (abs(error) < 50)
+		{
+			timer = 1;
+		}
+		if (timer == 0)
+		{
+			clearTimer(T1);
+		}
+	}
+	movebase(0);
 }
 
 task main()
